@@ -8,23 +8,6 @@ import config
 
 s3_client = boto3.client("s3")
 
-"""
-こういうファイルだよ
-[
-    {
-        "keyPrefix": "s3://bucketName/soumu/",
-        "aclEntries": [
-            {
-                "Name": "soumu_group",
-                "Type": "GROUP",
-                "Access": "ALLOW"
-            }
-        ]
-    },
-    ...
-]
-"""
-
 
 class Acl:
     def __init__(self):
