@@ -46,5 +46,7 @@ export class KendraS3DataSource extends Construct {
       },
       schedule: 'cron(0 15 * * ? *)', // 毎日0:00(JST)
     })
+
+    this.dataSource.addDependency(props.index);
   }
 }
