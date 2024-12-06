@@ -1,7 +1,6 @@
 # Kendra の 利用方法
 
-
-このソリューションで構築した ACL は Box のメールアドレス、またはグループ名で指定することができます。
+このソリューションで構築したACLはBoxのメールアドレス、またはグループ名で指定することができます。
 
 ```
 res = kendra.query(
@@ -24,5 +23,3 @@ res = kendra.query(
     PageSize=10,
 )
 ```
-
-完全なソースは `./scripts/sample_query.py` を参照してください。

@@ -5,7 +5,7 @@ import * as kendra from 'aws-cdk-lib/aws-kendra'
 
 export interface KendraIndexProps {
   name: string
-  edition?: string
+  edition: string
 }
 
 export class KendraIndex extends Construct {
@@ -58,7 +58,7 @@ export class KendraIndex extends Construct {
 
     this.index = new kendra.CfnIndex(this, 'Default', {
       name: props.name,
-      edition: props.edition || 'DEVELOPER_EDITION',
+      edition: props.edition,
       roleArn: indexRole.roleArn,
     })
   }
