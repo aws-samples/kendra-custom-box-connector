@@ -1,17 +1,24 @@
 import * as cdk from 'aws-cdk-lib'
 import { Construct } from 'constructs'
+import * as ec2 from 'aws-cdk-lib/aws-ec2'
 import * as s3 from 'aws-cdk-lib/aws-s3'
 import * as iam from 'aws-cdk-lib/aws-iam'
 import * as sqs from 'aws-cdk-lib/aws-sqs'
 import * as logs from 'aws-cdk-lib/aws-logs'
 import * as apigateway from 'aws-cdk-lib/aws-apigateway'
-import * as dynamodb from 'aws-cdk-lib/aws-dynamodb'
-import * as lambda from 'aws-cdk-lib/aws-lambda'
-import * as lambdaEventSources from 'aws-cdk-lib/aws-lambda-event-sources'
+import * as ecs from 'aws-cdk-lib/aws-ecs'
 import * as python from '@aws-cdk/aws-lambda-python-alpha'
+import { Database } from './database'
+import * as events from 'aws-cdk-lib/aws-events'
+import * as targets from 'aws-cdk-lib/aws-events-targets'
 
 export interface BoxConnectorProps {
+  vpc: ec2.IVpc
   bucket: s3.Bucket
+  database: Database
+  maxReceiveCount: number
+  eventHandlerSchedule: events.Schedule
+  boxRootFolderIds: number[]
 }
 
 export class BoxConnector extends Construct {
@@ -27,16 +34,19 @@ export class BoxConnector extends Construct {
     })
 
     const deadLetterQueue = new sqs.Queue(this, 'DeadLetterQueue', {
+      fifo: true,
       retentionPeriod: cdk.Duration.days(14),
       enforceSSL: true,
     })
     this.deadLetterQueue = deadLetterQueue
 
     const queue = new sqs.Queue(this, 'Queue', {
-      visibilityTimeout: cdk.Duration.minutes(3),
+      fifo: true,
+      contentBasedDeduplication: true,
+      visibilityTimeout: cdk.Duration.seconds(30),
       enforceSSL: true,
       deadLetterQueue: {
-        maxReceiveCount: 2,
+        maxReceiveCount: props.maxReceiveCount,
         queue: deadLetterQueue,
       },
     })
@@ -54,7 +64,8 @@ export class BoxConnector extends Construct {
           'integration.request.header.Content-Type': `'application/x-www-form-urlencoded'`,
         },
         requestTemplates: {
-          'application/json': 'Action=SendMessage&MessageBody=$input.body',
+          'application/json':
+            'Action=SendMessage&MessageGroupId=Box&MessageBody=$input.body',
         },
         integrationResponses: [
           {
@@ -101,56 +112,63 @@ export class BoxConnector extends Construct {
       ],
     })
 
-    const itemTable = new dynamodb.TableV2(this, 'ItemTable', {
-      partitionKey: { name: 'item_id', type: dynamodb.AttributeType.STRING },
-      globalSecondaryIndexes: [
-        {
-          indexName: 'key-index',
-          partitionKey: {
-            name: 'source_type',
-            type: dynamodb.AttributeType.STRING,
-          },
-          sortKey: {
-            name: 's3_key',
-            type: dynamodb.AttributeType.STRING,
-          },
-          projectionType: dynamodb.ProjectionType.ALL,
-        },
-      ],
+    const { accountId, region } = new cdk.ScopedAws(this)
+
+    const cluster = new ecs.Cluster(this, 'Cluster', {
+      vpc: props.vpc,
     })
 
-    const collaborationTable = new dynamodb.TableV2(
+    const taskDefinition = new ecs.FargateTaskDefinition(
       this,
-      'CollaborationTable',
+      'TaskDefinition',
       {
-        partitionKey: { name: 'item_id', type: dynamodb.AttributeType.STRING },
-        sortKey: {
-          name: 'collaboration_id',
-          type: dynamodb.AttributeType.STRING,
-        },
+        cpu: 1024,
+        memoryLimitMiB: 2048,
+        runtimePlatform: { cpuArchitecture: ecs.CpuArchitecture.X86_64 },
       },
     )
 
-    const fn = new python.PythonFunction(this, 'Function', {
-      entry: '../functions/box_connector',
-      runtime: lambda.Runtime.PYTHON_3_12,
-      memorySize: 1024,
-      ephemeralStorageSize: cdk.Size.mebibytes(512),
-      timeout: cdk.Duration.minutes(3),
+    taskDefinition.addContainer('BoxConnector', {
+      containerName: 'box-connector',
+      image: ecs.ContainerImage.fromAsset('../box_connector'),
+      logging: ecs.LogDriver.awsLogs({
+        streamPrefix: 'log',
+      }),
+      secrets: {
+        DB_USER: ecs.Secret.fromSecretsManager(
+          props.database.secret,
+          'username',
+        ),
+        DB_PASSWORD: ecs.Secret.fromSecretsManager(
+          props.database.secret,
+          'password',
+        ),
+      },
       environment: {
+        DB_HOST: props.database.cluster.clusterEndpoint.hostname,
+        DB_PORT: props.database.cluster.clusterEndpoint.port.toString(),
+        DB_NAME: props.database.databaseName,
         BUCKET_NAME: props.bucket.bucketName,
-        ITEM_TABLE: itemTable.tableName,
-        COLLABORATION_TABLE: collaborationTable.tableName,
+        SQS_QUEUE_NAME: queue.queueName,
+        BOX_ROOT_FOLDER_IDS: props.boxRootFolderIds.join(','),
       },
     })
-    this.function = fn
-    props.bucket.grantReadWrite(fn)
-    itemTable.grantReadWriteData(fn)
-    collaborationTable.grantReadWriteData(fn)
 
-    const { accountId, region } = new cdk.ScopedAws(this)
+    const securityGroup = new ec2.SecurityGroup(this, 'SecurityGroup', {
+      vpc: props.vpc,
+      description: 'BoxConnector security group',
+      allowAllOutbound: true,
+    })
 
-    // AWS Systems Manager から Box の Config を取得できるポリシー
+    props.database.connections.allowFrom(
+      securityGroup,
+      ec2.Port.tcp(props.database.cluster.clusterEndpoint.port),
+      'Allow from fargate cluster',
+    )
+    props.bucket.grantReadWrite(taskDefinition.taskRole)
+    queue.grantConsumeMessages(taskDefinition.taskRole)
+
+    // AWS Systems ManagerからBoxのConfigを取得できるポリシー
     const allowGetBoxConfigPolicy = new iam.ManagedPolicy(
       this,
       'AllowGetBoxConfigPolicy',
@@ -166,10 +184,29 @@ export class BoxConnector extends Construct {
         ],
       },
     )
-    fn.role?.addManagedPolicy(allowGetBoxConfigPolicy)
 
-    fn.addEventSource(
-      new lambdaEventSources.SqsEventSource(queue, { batchSize: 1 }),
-    )
+    taskDefinition.taskRole.addManagedPolicy(allowGetBoxConfigPolicy)
+
+    new events.Rule(this, 'Rule', {
+      schedule: props.eventHandlerSchedule,
+      targets: [
+        new targets.EcsTask({
+          cluster,
+          taskDefinition,
+          subnetSelection: { subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS },
+          securityGroups: [securityGroup],
+        }),
+      ],
+    })
+
+    new cdk.CfnOutput(this, 'CrawlerCommand', {
+      value: `aws ecs run-task \\
+    --cluster ${cluster.clusterName} \\
+    --launch-type FARGATE \\
+    --network-configuration "awsvpcConfiguration={subnets=[${props.vpc.privateSubnets[0].subnetId}],securityGroups=[${securityGroup.securityGroupId}]}" \\
+    --task-definition ${taskDefinition.family} \\
+    --overrides '{"containerOverrides":[{"name":"box-connector","command":["box_crawler.py"],"environment":[{"name":"SKIP_EXISTING_ITEMS","value":"True"}]}]}'`,
+      description: 'ECS Run Task command for crawling Box',
+    })
   }
 }

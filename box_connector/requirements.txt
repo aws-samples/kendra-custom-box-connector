@@ -1,0 +1,8 @@
+aws-lambda-powertools
+box-sdk-gen[jwt]
+peewee
+psycopg2-binary
+boto3
+python-dotenv
+setuptools
+python-json-logger

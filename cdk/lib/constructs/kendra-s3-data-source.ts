@@ -7,6 +7,7 @@ export interface KendraS3DataSourceProps {
   name: string
   index: kendra.CfnIndex
   bucket: s3.Bucket
+  dataSourceSyncSchedule: string
 }
 
 export class KendraS3DataSource extends Construct {
@@ -44,9 +45,9 @@ export class KendraS3DataSource extends Construct {
           },
         },
       },
-      schedule: 'cron(0 15 * * ? *)', // 毎日0:00(JST)
+      schedule: props.dataSourceSyncSchedule,
     })
 
-    this.dataSource.addDependency(props.index);
+    this.dataSource.addDependency(props.index)
   }
 }

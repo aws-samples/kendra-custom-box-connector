@@ -8,7 +8,6 @@
 - Docker
 
 ## 2. Box アプリケーションの作成
-
 [MyApps](https://app.box.com/developers/console) から Box アプリケーションを作成します。
 
 ### 2.1. Create a Custom App
@@ -41,20 +40,26 @@ aws ssm put-parameter \
 ```
 
 ## 4. CDK アプリケーションのデプロイ
-### 4.1. cdk.jsonのあるディレクトリで、依存モジュールをインストールします。
+### 4.1 設定変更
+`cdk/bin/parameters.ts` を開き設定を変更します。最低限 `boxRootFolderIds` の変更が必要です。
+
+### 4.2. モジュールのインストール
+cdk.jsonのあるディレクトリで、依存モジュールをインストールします。
 
 ```
-npm ci
+npm install
 ```
 
-### 4.2. 一度もそのリージョンで `cdk deploy` を実行したことがない場合は、初回のみ `cdk bootstrap` を実行します。
+### 4.3. ブートストラップ
+一度もそのリージョンで `cdk deploy` を実行したことがない場合は、初回のみ `cdk bootstrap` を実行します。
 `cdk bootstrap` 実行により、AWS CDK が利用するリソースを CloudFormation スタックとしてAWSにデプロイします。
 
 ```
 npx cdk bootstrap
 ```
 
-### 4.3. デプロイを実行します。
+### 4.4. デプロイ
+デプロイを実行します。
 ```
 npx cdk deploy
 ```
@@ -64,17 +69,22 @@ npx cdk deploy
 Do you wish to deploy these changes (y/n)? y
 ```
 
-デプロイが正常に完了すると、以下のように Webhook のエンドポイントが表示されるので控えて下さい。
-
+デプロイが正常に完了すると、以下のようにOutputsが表示されるので控えてください。この情報はCloudFormationコンソール上からでも確認できます。
 ```
  ✅  KendraBoxConnectorStack
 
 ✨  Deployment time: 72.83s
 
 Outputs:
+KendraBoxConnectorStack.BoxConnectorCrawlerCommand**** = aws ecs run-task \
+    --cluster KendraBoxConnectorStack-BoxConnectorCluster**** \
+    --launch-type FARGATE \
+    --network-configuration "awsvpcConfiguration={subnets=[subnet-****],securityGroups=[sg-****]}" \
+    --task-definition KendraBoxConnectorStackBoxConnectorTaskDefinition**** \
+    --overrides '{"containerOverrides":[{"name":"box-connector","command":["box_crawler.py"],"environment":[{"name":"SKIP_EXISTING_ITEMS","value":"True"}]}]}'
 KendraBoxConnectorStack.BoxConnectorRestApiEndpointEF6CDB54 = https://********.execute-api.us-east-1.amazonaws.com/prod/
 Stack ARN:
-arn:aws:cloudformation:us-east-1:171368914135:stack/KendraBoxConnectorStack/d572d540-7662-11ef-9fee-0e10530f727b
+arn:aws:cloudformation:us-east-1:****:stack/KendraBoxConnectorStack/****
 
 ✨  Total time: 97.21s
 ```
@@ -112,5 +122,5 @@ COLLABORATION.UPDATED
 ```
 
 ## 5.3. サービスアカウントへのフォルダ共有設定
-Webhook の対象にしたフォルダに Lambda がアクセスできるように、手順2.2 で設定したメールアドレスに対してフォルダの共有設定を行ってください。
+Webhookの対象にしたフォルダにプログラムがアクセスできるように、手順2.2で設定したメールアドレスに対してフォルダの共有設定を行ってください。
 権限は最低限の `Viewer` で動作します。
